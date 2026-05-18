@@ -122,9 +122,27 @@ aside {
   color: var(--fg-muted); padding: 6px 12px;
   font-weight: 700;
 }
+.tree-folder {
+  display: flex; align-items: center; gap: 4px;
+  padding: 3px 12px;
+  cursor: pointer; user-select: none;
+  font-size: 12.5px; color: var(--fg-muted);
+  font-weight: 600;
+}
+.tree-folder:hover { background: var(--bg-hover); }
+.tree-folder .toggle {
+  display: inline-block; width: 10px; flex-shrink: 0;
+  font-size: 9px; color: var(--fg-muted);
+}
+.tree-folder .ficon {
+  flex-shrink: 0; font-size: 11px; opacity: 0.7;
+}
+.tree-folder .name {
+  flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .tree-row {
   display: flex; align-items: center; gap: 6px;
-  padding: 4px 12px 4px 24px;
+  padding: 4px 12px;
   cursor: pointer; user-select: none;
   font-size: 13px;
 }
@@ -550,6 +568,7 @@ const state = {
   theme: localStorage.getItem("he-theme") || "light",
   sidebarCollapsed: false,
   previewCollapsed: false,
+  collapsedDirs: new Set(), // 접힌 폴더 path 모음
 };
 
 document.documentElement.setAttribute("data-theme", state.theme);
@@ -1004,25 +1023,54 @@ function renderTree() {
   treeEl.style.display = "block"; empty.style.display = "none";
   treeEl.innerHTML = "";
 
-  const groups = {};
+  // 경로 트리 빌드 — f.path를 "/"로 분해해서 폴더/파일 노드 구성
+  const root = { children: {}, files: [], path: "" };
   for (const f of state.files) {
-    (groups[f.group] || (groups[f.group] = [])).push(f);
+    const parts = f.path.split("/");
+    let node = root;
+    let acc = "";
+    for (let i = 0; i < parts.length - 1; i++) {
+      acc = acc ? `${acc}/${parts[i]}` : parts[i];
+      if (!node.children[parts[i]]) {
+        node.children[parts[i]] = { children: {}, files: [], path: acc };
+      }
+      node = node.children[parts[i]];
+    }
+    node.files.push(f);
   }
-  const order = ["claude-md", "agents", "skills", "other"];
-  const labels = { "claude-md": "CLAUDE.md", "agents": ".claude/agents", "skills": ".claude/skills", "other": "기타" };
 
-  for (const g of order) {
-    if (!groups[g]) continue;
-    const sec = el("div", { class: "tree-section" },
-      el("div", { class: "tree-section-header" }, labels[g])
-    );
-    for (const f of groups[g]) {
+  function renderNode(node, depth) {
+    const indent = (d) => `padding-left: ${12 + d * 14}px`;
+    // 폴더 자식들 (이름 알파벳 정렬)
+    const dirNames = Object.keys(node.children).sort();
+    for (const dn of dirNames) {
+      const child = node.children[dn];
+      const expanded = !state.collapsedDirs.has(child.path);
+      const folderRow = el("div", {
+        class: "tree-folder", style: indent(depth), title: child.path
+      },
+        el("span", { class: "toggle" }, expanded ? "▼" : "▶"),
+        el("span", { class: "ficon" }, expanded ? "📂" : "📁"),
+        el("span", { class: "name" }, dn)
+      );
+      folderRow.addEventListener("click", () => {
+        if (state.collapsedDirs.has(child.path)) state.collapsedDirs.delete(child.path);
+        else state.collapsedDirs.add(child.path);
+        renderTree();
+      });
+      treeEl.appendChild(folderRow);
+      if (expanded) renderNode(child, depth + 1);
+    }
+    // 직속 파일들 (이름 정렬)
+    const files = [...node.files].sort((a, b) => a.name.localeCompare(b.name));
+    for (const f of files) {
       const dotClass = f.fileType === "agent" ? "agent" :
                         f.fileType === "orchestrator" ? "orchestrator" :
                         f.fileType === "skill" ? "skill" : "skill";
       const issues = (f.validation?.errors?.length || 0) + (f.parsed?.errors?.length || 0);
       const row = el("div",
         { class: "tree-row" + (state.currentPath === f.path ? " active" : ""),
+          style: indent(depth),
           title: f.path },
         el("span", { class: "dot " + dotClass }),
         el("span", { class: "name" },
@@ -1032,10 +1080,10 @@ function renderTree() {
         issues > 0 ? el("span", { class: "errmark", title: `${issues}개 오류` }, "!") : null,
       );
       row.addEventListener("click", () => openFile(f.path));
-      sec.appendChild(row);
+      treeEl.appendChild(row);
     }
-    treeEl.appendChild(sec);
   }
+  renderNode(root, 0);
 }
 
 function renderEditorArea() {
